@@ -5,7 +5,7 @@ This is the project containing information related to ConfDroid.
 The information of 196 configuration compatibility issues issues can be found <a href="https://docs.google.com/spreadsheets/d/e/2PACX-1vT-xSYMKB-cYSperAutZnJQV4l7I_rEJhhXATJ0QWN0YMUmYoWL5RJFF7-3iAadqILZx6wqKfXBwcaS/pubhtml">here</a>.
 
 ### Demo videos
-You can watch the demo videos about real configuration compatibility issues detected by ConfDroid under the **./example** folder.
+You can watch the demo videos about real configuration compatibility issues detected by ConfDroid under the **./demo-video** folder.
 
 ### Tool
 Coming soon.
