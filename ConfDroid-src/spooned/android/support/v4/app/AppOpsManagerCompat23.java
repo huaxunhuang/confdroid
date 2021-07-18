@@ -1,0 +1,37 @@
+/**
+ * Copyright (C) 2015 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package android.support.v4.app;
+
+
+/**
+ * AppOpsManager implementations for API 23.
+ */
+class AppOpsManagerCompat23 {
+    public static java.lang.String permissionToOp(java.lang.String permission) {
+        return android.app.AppOpsManager.permissionToOp(permission);
+    }
+
+    public static int noteOp(android.content.Context context, java.lang.String op, int uid, java.lang.String packageName) {
+        android.app.AppOpsManager appOpsManager = context.getSystemService(android.app.AppOpsManager.class);
+        return appOpsManager.noteOp(op, uid, packageName);
+    }
+
+    public static int noteProxyOp(android.content.Context context, java.lang.String op, java.lang.String proxiedPackageName) {
+        android.app.AppOpsManager appOpsManager = context.getSystemService(android.app.AppOpsManager.class);
+        return appOpsManager.noteProxyOp(op, proxiedPackageName);
+    }
+}
+

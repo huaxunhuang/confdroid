@@ -1,0 +1,693 @@
+/**
+ * Copyright (C) 2018 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package android.view.contentcapture;
+
+
+/**
+ * Content capture is mechanism used to let apps notify the Android system of events associated with
+ * views.
+ *
+ * <p>Before using this manager, you should check if it's available. Example:
+ * <pre><code>
+ *  ContentCaptureManager mgr = context.getSystemService(ContentCaptureManager.class);
+ *  if (mgr != null && mgr.isContentCaptureEnabled()) {
+ *    // ...
+ *  }
+ *  </code></pre>
+ *
+ * <p>To support content capture, you must notifiy the Android system of the following events:
+ *
+ * <ul>
+ *   <li>When a visible view is laid out, call
+ *   {@link ContentCaptureSession#notifyViewAppeared(ViewStructure)}.
+ *   <li>When a view becomes invisible or is removed from the view hierarchy, call
+ *   {@link ContentCaptureSession#notifyViewDisappeared(android.view.autofill.AutofillId)}.
+ *   <li>When the view represents text and the text value changed, call {@link ContentCaptureSession#notifyViewTextChanged(android.view.autofill.AutofillId, CharSequence)}.
+ * </ul>
+ *
+ * <p>You can get a blank content capture structure using
+ * {@link ContentCaptureSession#newViewStructure(View)}, then populate its relevant fields.
+ * Here's an example of the relevant methods for an {@code EditText}-like view:
+ *
+ * <pre><code>
+ * public class MyEditText extends View {
+ *
+ * private void populateContentCaptureStructure(@NonNull ViewStructure structure) {
+ *   structure.setText(getText(), getSelectionStart(), getSelectionEnd());
+ *   structure.setHint(getHint());
+ *   structure.setInputType(getInputType());
+ *   // set other properties like setTextIdEntry(), setTextLines(), setTextStyle(),
+ *   // setMinTextEms(), setMaxTextEms(), setMaxTextLength()
+ * }
+ *
+ * private void onTextChanged() {
+ *   if (isLaidOut() && isTextEditable()) {
+ *     ContentCaptureManager mgr = mContext.getSystemService(ContentCaptureManager.class);
+ *     if (cm != null && cm.isContentCaptureEnabled()) {
+ *        ContentCaptureSession session = getContentCaptureSession();
+ *        if (session != null) {
+ *          session.notifyViewTextChanged(getAutofillId(), getText());
+ *        }
+ *   }
+ * }
+ * </code></pre>
+ *
+ * <p>The main integration point with content capture is the {@link ContentCaptureSession}. A "main"
+ * session is automatically created by the Android system when content capture is enabled for the
+ * activity. The session could have a {@link ContentCaptureContext} to provide more contextual info
+ * about it, such as the locus associated with the view hierarchy
+ * (see {@link android.content.LocusId} for more info about locus). By default, the main session
+ * doesn't have a {@code ContentCaptureContext}, but you can change it after its created. Example:
+ *
+ * <pre><code>
+ * protected void onCreate(Bundle savedInstanceState) {
+ *   // Initialize view structure
+ *   ContentCaptureSession session = rootView.getContentCaptureSession();
+ *   if (session != null) {
+ *     session.setContentCaptureContext(ContentCaptureContext.forLocusId("chat_UserA_UserB"));
+ *   }
+ * }
+ * </code></pre>
+ *
+ * <p>If your activity contains view hierarchies with a different contextual meaning, you should
+ * created child sessions for each view hierarchy root. For example, if your activity is a browser,
+ * you could use the main session for the main URL being rendered, then child sessions for each
+ * {@code IFRAME}:
+ *
+ * <pre><code>
+ * ContentCaptureSession mMainSession;
+ *
+ * protected void onCreate(Bundle savedInstanceState) {
+ *    // Initialize view structure...
+ *    mMainSession = rootView.getContentCaptureSession();
+ *    if (mMainSession != null) {
+ *      mMainSession.setContentCaptureContext(
+ *          ContentCaptureContext.forLocusId("https://example.com"));
+ *    }
+ * }
+ *
+ * private void loadIFrame(View iframeRootView, String url) {
+ *   if (mMainSession != null) {
+ *      ContentCaptureSession iFrameSession = mMainSession.newChild(
+ *          ContentCaptureContext.forLocusId(url));
+ *      }
+ *      iframeRootView.setContentCaptureSession(iFrameSession);
+ *   }
+ *   // Load iframe...
+ * }
+ * </code></pre>
+ */
+@android.annotation.SystemService(android.content.Context.CONTENT_CAPTURE_MANAGER_SERVICE)
+public final class ContentCaptureManager {
+    private static final java.lang.String TAG = android.view.contentcapture.ContentCaptureManager.class.getSimpleName();
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int RESULT_CODE_OK = 0;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int RESULT_CODE_TRUE = 1;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int RESULT_CODE_FALSE = 2;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int RESULT_CODE_SECURITY_EXCEPTION = -1;
+
+    /**
+     * Timeout for calls to system_server.
+     */
+    private static final int SYNC_CALLS_TIMEOUT_MS = 5000;
+
+    /**
+     * DeviceConfig property used by {@code com.android.server.SystemServer} on start to decide
+     * whether the content capture service should be created or not
+     *
+     * <p>By default it should *NOT* be set (or set to {@code "default"}, so the decision is based
+     * on whether the OEM provides an implementation for the service), but it can be overridden to:
+     *
+     * <ul>
+     *   <li>Provide a "kill switch" so OEMs can disable it remotely in case of emergency (when
+     *   it's set to {@code "false"}).
+     *   <li>Enable the CTS tests to be run on AOSP builds (when it's set to {@code "true"}).
+     * </ul>
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final java.lang.String DEVICE_CONFIG_PROPERTY_SERVICE_EXPLICITLY_ENABLED = "service_explicitly_enabled";
+
+    /**
+     * Maximum number of events that are buffered before sent to the app.
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final java.lang.String DEVICE_CONFIG_PROPERTY_MAX_BUFFER_SIZE = "max_buffer_size";
+
+    /**
+     * Frequency (in ms) of buffer flushes when no events are received.
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final java.lang.String DEVICE_CONFIG_PROPERTY_IDLE_FLUSH_FREQUENCY = "idle_flush_frequency";
+
+    /**
+     * Frequency (in ms) of buffer flushes when no events are received and the last one was a
+     * text change event.
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final java.lang.String DEVICE_CONFIG_PROPERTY_TEXT_CHANGE_FLUSH_FREQUENCY = "text_change_flush_frequency";
+
+    /**
+     * Size of events that are logging on {@code dump}.
+     *
+     * <p>Set it to {@code 0} or less to disable history.
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final java.lang.String DEVICE_CONFIG_PROPERTY_LOG_HISTORY_SIZE = "log_history_size";
+
+    /**
+     * Sets the logging level for {@code logcat} statements.
+     *
+     * <p>Valid values are: {@link #LOGGING_LEVEL_OFF}, {@value #LOGGING_LEVEL_DEBUG}, and
+     * {@link #LOGGING_LEVEL_VERBOSE}.
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final java.lang.String DEVICE_CONFIG_PROPERTY_LOGGING_LEVEL = "logging_level";
+
+    /**
+     * Sets how long (in ms) the service is bound while idle.
+     *
+     * <p>Use {@code 0} to keep it permanently bound.
+     *
+     * @unknown 
+     */
+    public static final java.lang.String DEVICE_CONFIG_PROPERTY_IDLE_UNBIND_TIMEOUT = "idle_unbind_timeout";
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final int LOGGING_LEVEL_OFF = 0;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final int LOGGING_LEVEL_DEBUG = 1;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.TestApi
+    public static final int LOGGING_LEVEL_VERBOSE = 2;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.IntDef(flag = false, value = { android.view.contentcapture.ContentCaptureManager.LOGGING_LEVEL_OFF, android.view.contentcapture.ContentCaptureManager.LOGGING_LEVEL_DEBUG, android.view.contentcapture.ContentCaptureManager.LOGGING_LEVEL_VERBOSE })
+    @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.SOURCE)
+    public @interface LoggingLevel {}
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int DEFAULT_MAX_BUFFER_SIZE = 100;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int DEFAULT_IDLE_FLUSHING_FREQUENCY_MS = 5000;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int DEFAULT_TEXT_CHANGE_FLUSHING_FREQUENCY_MS = 1000;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public static final int DEFAULT_LOG_HISTORY_SIZE = 10;
+
+    private final java.lang.Object mLock = new java.lang.Object();
+
+    @android.annotation.NonNull
+    private final android.content.Context mContext;
+
+    @android.annotation.NonNull
+    private final android.view.contentcapture.IContentCaptureManager mService;
+
+    @android.annotation.NonNull
+    final android.content.ContentCaptureOptions mOptions;
+
+    // Flags used for starting session.
+    @com.android.internal.annotations.GuardedBy("mLock")
+    private int mFlags;
+
+    // TODO(b/119220549): use UI Thread directly (as calls are one-way) or a shared thread / handler
+    // held at the Application level
+    @android.annotation.NonNull
+    private final android.os.Handler mHandler;
+
+    @com.android.internal.annotations.GuardedBy("mLock")
+    private android.view.contentcapture.MainContentCaptureSession mMainSession;
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public interface ContentCaptureClient {
+        /**
+         * Gets the component name of the client.
+         */
+        @android.annotation.NonNull
+        android.content.ComponentName contentCaptureClientGetComponentName();
+    }
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public ContentCaptureManager(@android.annotation.NonNull
+    android.content.Context context, @android.annotation.NonNull
+    android.view.contentcapture.IContentCaptureManager service, @android.annotation.NonNull
+    android.content.ContentCaptureOptions options) {
+        mContext = com.android.internal.util.Preconditions.checkNotNull(context, "context cannot be null");
+        mService = com.android.internal.util.Preconditions.checkNotNull(service, "service cannot be null");
+        mOptions = com.android.internal.util.Preconditions.checkNotNull(options, "options cannot be null");
+        android.view.contentcapture.ContentCaptureHelper.setLoggingLevel(mOptions.loggingLevel);
+        if (android.view.contentcapture.ContentCaptureHelper.sVerbose)
+            android.util.Log.v(android.view.contentcapture.ContentCaptureManager.TAG, "Constructor for " + context.getPackageName());
+
+        // TODO(b/119220549): we might not even need a handler, as the IPCs are oneway. But if we
+        // do, then we should optimize it to run the tests after the Choreographer finishes the most
+        // important steps of the frame.
+        mHandler = android.os.Handler.createAsync(android.os.Looper.getMainLooper());
+    }
+
+    /**
+     * Gets the main session associated with the context.
+     *
+     * <p>By default there's just one (associated with the activity lifecycle), but apps could
+     * explicitly add more using
+     * {@link ContentCaptureSession#createContentCaptureSession(ContentCaptureContext)}.
+     *
+     * @unknown 
+     */
+    @android.annotation.NonNull
+    @android.annotation.UiThread
+    public android.view.contentcapture.MainContentCaptureSession getMainContentCaptureSession() {
+        synchronized(mLock) {
+            if (mMainSession == null) {
+                mMainSession = new android.view.contentcapture.MainContentCaptureSession(mContext, this, mHandler, mService);
+                if (android.view.contentcapture.ContentCaptureHelper.sVerbose)
+                    android.util.Log.v(android.view.contentcapture.ContentCaptureManager.TAG, "getMainContentCaptureSession(): created " + mMainSession);
+
+            }
+            return mMainSession;
+        }
+    }
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.UiThread
+    public void onActivityCreated(@android.annotation.NonNull
+    android.os.IBinder applicationToken, @android.annotation.NonNull
+    android.content.ComponentName activityComponent) {
+        if (mOptions.lite)
+            return;
+
+        synchronized(mLock) {
+            getMainContentCaptureSession().start(applicationToken, activityComponent, mFlags);
+        }
+    }
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.UiThread
+    public void onActivityResumed() {
+        if (mOptions.lite)
+            return;
+
+        /* started= */
+        getMainContentCaptureSession().notifySessionLifecycle(true);
+    }
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.UiThread
+    public void onActivityPaused() {
+        if (mOptions.lite)
+            return;
+
+        /* started= */
+        getMainContentCaptureSession().notifySessionLifecycle(false);
+    }
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    @android.annotation.UiThread
+    public void onActivityDestroyed() {
+        if (mOptions.lite)
+            return;
+
+        getMainContentCaptureSession().destroy();
+    }
+
+    /**
+     * Flushes the content of all sessions.
+     *
+     * <p>Typically called by {@code Activity} when it's paused / resumed.
+     *
+     * @unknown 
+     */
+    @android.annotation.UiThread
+    public void flush(@android.view.contentcapture.ContentCaptureSession.FlushReason
+    int reason) {
+        if (mOptions.lite)
+            return;
+
+        getMainContentCaptureSession().flush(reason);
+    }
+
+    /**
+     * Returns the component name of the system service that is consuming the captured events for
+     * the current user.
+     */
+    @android.annotation.Nullable
+    public android.content.ComponentName getServiceComponentName() {
+        if ((!isContentCaptureEnabled()) && (!mOptions.lite))
+            return null;
+
+        final com.android.internal.util.SyncResultReceiver resultReceiver = new com.android.internal.util.SyncResultReceiver(android.view.contentcapture.ContentCaptureManager.SYNC_CALLS_TIMEOUT_MS);
+        try {
+            mService.getServiceComponentName(resultReceiver);
+            return resultReceiver.getParcelableResult();
+        } catch (android.os.RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Gets the (optional) intent used to launch the service-specific settings.
+     *
+     * <p>This method is static because it's called by Settings, which might not be whitelisted
+     * for content capture (in which case the ContentCaptureManager on its context would be null).
+     *
+     * @unknown 
+     */
+    // TODO: use "lite" options as it's done by activities from the content capture service
+    @android.annotation.Nullable
+    public static android.content.ComponentName getServiceSettingsComponentName() {
+        final android.os.IBinder binder = android.os.ServiceManager.checkService(android.content.Context.CONTENT_CAPTURE_MANAGER_SERVICE);
+        if (binder == null)
+            return null;
+
+        final android.view.contentcapture.IContentCaptureManager service = IContentCaptureManager.Stub.asInterface(binder);
+        final com.android.internal.util.SyncResultReceiver resultReceiver = new com.android.internal.util.SyncResultReceiver(android.view.contentcapture.ContentCaptureManager.SYNC_CALLS_TIMEOUT_MS);
+        try {
+            service.getServiceSettingsActivity(resultReceiver);
+            final int resultCode = resultReceiver.getIntResult();
+            if (resultCode == android.view.contentcapture.ContentCaptureManager.RESULT_CODE_SECURITY_EXCEPTION) {
+                throw new java.lang.SecurityException(resultReceiver.getStringResult());
+            }
+            return resultReceiver.getParcelableResult();
+        } catch (android.os.RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Checks whether content capture is enabled for this activity.
+     */
+    public boolean isContentCaptureEnabled() {
+        if (mOptions.lite)
+            return false;
+
+        final android.view.contentcapture.MainContentCaptureSession mainSession;
+        synchronized(mLock) {
+            mainSession = mMainSession;
+        }
+        // The main session is only set when the activity starts, so we need to return true until
+        // then.
+        if ((mainSession != null) && mainSession.isDisabled())
+            return false;
+
+        return true;
+    }
+
+    /**
+     * Gets the list of conditions for when content capture should be allowed.
+     *
+     * <p>This method is typically used by web browsers so they don't generate unnecessary content
+     * capture events for some websites.
+     *
+     * @return list of conditions, or {@code null} if there isn't any restriction
+    (in which case content capture events should always be generated). If the list is empty,
+    then it should not generate any event at all.
+     */
+    @android.annotation.Nullable
+    public java.util.Set<android.view.contentcapture.ContentCaptureCondition> getContentCaptureConditions() {
+        // NOTE: we could cache the conditions on ContentCaptureOptions, but then it would be stick
+        // to the lifetime of the app. OTOH, by dynamically calling the server every time, we allow
+        // the service to fine tune how long-lived apps (like browsers) are whitelisted.
+        if ((!isContentCaptureEnabled()) && (!mOptions.lite))
+            return null;
+
+        final com.android.internal.util.SyncResultReceiver resultReceiver = syncRun(( r) -> mService.getContentCaptureConditions(mContext.getPackageName(), r));
+        final java.util.ArrayList<android.view.contentcapture.ContentCaptureCondition> result = resultReceiver.getParcelableListResult();
+        return android.view.contentcapture.ContentCaptureHelper.toSet(result);
+    }
+
+    /**
+     * Called by apps to explicitly enable or disable content capture.
+     *
+     * <p><b>Note: </b> this call is not persisted accross reboots, so apps should typically call
+     * it on {@link android.app.Activity#onCreate(android.os.Bundle, android.os.PersistableBundle)}.
+     */
+    public void setContentCaptureEnabled(boolean enabled) {
+        if (android.view.contentcapture.ContentCaptureHelper.sDebug) {
+            android.util.Log.d(android.view.contentcapture.ContentCaptureManager.TAG, (("setContentCaptureEnabled(): setting to " + enabled) + " for ") + mContext);
+        }
+        android.view.contentcapture.MainContentCaptureSession mainSession;
+        synchronized(mLock) {
+            if (enabled) {
+                mFlags &= ~android.view.contentcapture.ContentCaptureContext.FLAG_DISABLED_BY_APP;
+            } else {
+                mFlags |= android.view.contentcapture.ContentCaptureContext.FLAG_DISABLED_BY_APP;
+            }
+            mainSession = mMainSession;
+        }
+        if (mainSession != null) {
+            mainSession.setDisabled(!enabled);
+        }
+    }
+
+    /**
+     * Called by apps to update flag secure when window attributes change.
+     *
+     * @unknown 
+     */
+    public void updateWindowAttributes(@android.annotation.NonNull
+    android.view.WindowManager.LayoutParams params) {
+        if (android.view.contentcapture.ContentCaptureHelper.sDebug) {
+            android.util.Log.d(android.view.contentcapture.ContentCaptureManager.TAG, "updateWindowAttributes(): window flags=" + params.flags);
+        }
+        final boolean flagSecureEnabled = (params.flags & android.view.WindowManager.LayoutParams.FLAG_SECURE) != 0;
+        android.view.contentcapture.MainContentCaptureSession mainSession;
+        synchronized(mLock) {
+            if (flagSecureEnabled) {
+                mFlags |= android.view.contentcapture.ContentCaptureContext.FLAG_DISABLED_BY_FLAG_SECURE;
+            } else {
+                mFlags &= ~android.view.contentcapture.ContentCaptureContext.FLAG_DISABLED_BY_FLAG_SECURE;
+            }
+            mainSession = mMainSession;
+        }
+        if (mainSession != null) {
+            mainSession.setDisabled(flagSecureEnabled);
+        }
+    }
+
+    /**
+     * Gets whether content capture is enabled for the given user.
+     *
+     * <p>This method is typically used by the content capture service settings page, so it can
+     * provide a toggle to enable / disable it.
+     *
+     * @throws SecurityException
+     * 		if caller is not the app that owns the content capture service
+     * 		associated with the user.
+     * @unknown 
+     */
+    @android.annotation.SystemApi
+    @android.annotation.TestApi
+    public boolean isContentCaptureFeatureEnabled() {
+        final com.android.internal.util.SyncResultReceiver resultReceiver = syncRun(( r) -> mService.isContentCaptureFeatureEnabled(r));
+        final int resultCode = resultReceiver.getIntResult();
+        switch (resultCode) {
+            case android.view.contentcapture.ContentCaptureManager.RESULT_CODE_TRUE :
+                return true;
+            case android.view.contentcapture.ContentCaptureManager.RESULT_CODE_FALSE :
+                return false;
+            default :
+                android.util.Log.wtf(android.view.contentcapture.ContentCaptureManager.TAG, "received invalid result: " + resultCode);
+                return false;
+        }
+    }
+
+    /**
+     * Called by the app to remove content capture data associated with some context.
+     *
+     * @param request
+     * 		object specifying what data should be removed.
+     */
+    public void removeData(@android.annotation.NonNull
+    android.view.contentcapture.DataRemovalRequest request) {
+        com.android.internal.util.Preconditions.checkNotNull(request);
+        try {
+            mService.removeData(request);
+        } catch (android.os.RemoteException e) {
+            e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Runs a sync method in the service, properly handling exceptions.
+     *
+     * @throws SecurityException
+     * 		if caller is not allowed to execute the method.
+     */
+    @android.annotation.NonNull
+    private com.android.internal.util.SyncResultReceiver syncRun(@android.annotation.NonNull
+    android.view.contentcapture.ContentCaptureManager.MyRunnable r) {
+        final com.android.internal.util.SyncResultReceiver resultReceiver = new com.android.internal.util.SyncResultReceiver(android.view.contentcapture.ContentCaptureManager.SYNC_CALLS_TIMEOUT_MS);
+        try {
+            r.run(resultReceiver);
+            final int resultCode = resultReceiver.getIntResult();
+            if (resultCode == android.view.contentcapture.ContentCaptureManager.RESULT_CODE_SECURITY_EXCEPTION) {
+                throw new java.lang.SecurityException(resultReceiver.getStringResult());
+            }
+            return resultReceiver;
+        } catch (android.os.RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     *
+     *
+     * @unknown 
+     */
+    public void dump(java.lang.String prefix, java.io.PrintWriter pw) {
+        pw.print(prefix);
+        pw.println("ContentCaptureManager");
+        final java.lang.String prefix2 = prefix + "  ";
+        synchronized(mLock) {
+            pw.print(prefix2);
+            pw.print("isContentCaptureEnabled(): ");
+            pw.println(isContentCaptureEnabled());
+            pw.print(prefix2);
+            pw.print("Debug: ");
+            pw.print(android.view.contentcapture.ContentCaptureHelper.sDebug);
+            pw.print(" Verbose: ");
+            pw.println(android.view.contentcapture.ContentCaptureHelper.sVerbose);
+            pw.print(prefix2);
+            pw.print("Context: ");
+            pw.println(mContext);
+            pw.print(prefix2);
+            pw.print("User: ");
+            pw.println(mContext.getUserId());
+            pw.print(prefix2);
+            pw.print("Service: ");
+            pw.println(mService);
+            pw.print(prefix2);
+            pw.print("Flags: ");
+            pw.println(mFlags);
+            pw.print(prefix2);
+            pw.print("Options: ");
+            mOptions.dumpShort(pw);
+            pw.println();
+            if (mMainSession != null) {
+                final java.lang.String prefix3 = prefix2 + "  ";
+                pw.print(prefix2);
+                pw.println("Main session:");
+                mMainSession.dump(prefix3, pw);
+            } else {
+                pw.print(prefix2);
+                pw.println("No sessions");
+            }
+        }
+    }
+
+    private interface MyRunnable {
+        void run(@android.annotation.NonNull
+        com.android.internal.util.SyncResultReceiver receiver) throws android.os.RemoteException;
+    }
+}
+
