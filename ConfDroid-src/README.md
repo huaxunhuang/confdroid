@@ -24,3 +24,4 @@ tag: shape
 data format: color|styled_color
 API level: 21,22
 ```
+The implementation of backward symbolic execution is based on <a href="https://github.com/JordanSamhi/TSOpen">TsOpen</a>. Thanks for your great work.
