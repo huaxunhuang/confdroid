@@ -1,9 +1,0 @@
-<component name="libraryTable">
-  <library name="javasmt-solver-z3-4.8.10-com.microsoft.z3">
-    <CLASSES>
-      <root url="jar://$PROJECT_DIR$/lib/javasmt-solver-z3-4.8.10-com.microsoft.z3.jar!/" />
-    </CLASSES>
-    <JAVADOC />
-    <SOURCES />
-  </library>
-</component>
